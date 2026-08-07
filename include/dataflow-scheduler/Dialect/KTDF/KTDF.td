@@ -155,6 +155,9 @@ def KTDF_ReadFromFifoOp : KTDF_Op<"read_from_fifo", [
     producing a tensor result followed by a deferred bufferization step that
     assigns a future (FIFO-backed) buffer to that tensor. Lowering passes are
     responsible for resolving the unrealized buffer to a concrete allocation.
+    A memref result produced with this op can be assumed to have a life-time
+    limited to the op's parent region scope, cannot leave that scope (eg via
+    yield) and does not alias any other memrefs.
 
     Example:
     ```mlir
