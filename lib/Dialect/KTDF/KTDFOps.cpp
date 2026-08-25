@@ -658,6 +658,485 @@ void DataTransferOp::getEffects(
 }
 
 //===----------------------------------------------------------------------===//
+// IndDataTransferOp
+//===----------------------------------------------------------------------===//
+
+// Parse a single `ind_src`/`ind_dst` clause:
+//   `none`                         → operand and index left unset
+//   ssa-value `[` ssa-value `]`    → operand and index set; affine map parsed
+//
+// Returns true if a non-none value was parsed (operand and index are filled),
+// false for `none`.
+static auto parseIndOperand(
+    OpAsmParser& parser,
+    std::optional<OpAsmParser::UnresolvedOperand>& operand,
+    std::optional<OpAsmParser::UnresolvedOperand>& index,
+    AffineMapAttr& map) -> ParseResult {
+  if (succeeded(parser.parseOptionalKeyword("none"))) {
+    return success();
+  }
+  operand.emplace();
+  index.emplace();
+  NamedAttrList attrs;
+  // Reuse parseAffineMapOfSSAIds for consistency with DataTransferOp, but
+  // the IAB memref is always accessed with a single flat index, so the map
+  // will be a 1-result identity map resolved from one SSA dim.
+  SmallVector<OpAsmParser::UnresolvedOperand> idx_list;
+  if (parser.parseOperand(*operand) || parser.parseLSquare() ||
+      parser.parseAffineMapOfSSAIds(idx_list, map, "map", attrs,
+                                    OpAsmParser::Delimiter::None) ||
+      parser.parseRSquare()) {
+    return failure();
+  }
+  if (idx_list.size() != 1) {
+    return parser.emitError(parser.getCurrentLocation(),
+                            "expected exactly one index for ind operand");
+  }
+  *index = idx_list[0];
+  return success();
+}
+
+static void printIndOperand(OpAsmPrinter& printer, Value operand, Value index,
+                             AffineMapAttr map) {
+  if (!operand) {
+    printer << "none";
+    return;
+  }
+  printer << operand << "[";
+  printer.printAffineMapOfSSAIds(map, index);
+  printer << "]";
+}
+
+auto IndDataTransferOp::parse(OpAsmParser& parser, OperationState& result)
+    -> ParseResult {
+  auto& builder = parser.getBuilder();
+  const auto index_type = builder.getIndexType();
+
+  std::optional<OpAsmParser::UnresolvedOperand> ind_src_op, ind_src_idx;
+  std::optional<OpAsmParser::UnresolvedOperand> ind_dst_op, ind_dst_idx;
+  OpAsmParser::UnresolvedOperand dir_src_op, dir_dst_op;
+  SmallVector<OpAsmParser::UnresolvedOperand> dir_src_indices, dir_src_sizes;
+  SmallVector<OpAsmParser::UnresolvedOperand> dir_dst_indices, dir_dst_sizes;
+  AffineMapAttr ind_src_map, dir_src_map, ind_dst_map, dir_dst_map;
+  DenseI64ArrayAttr static_dir_src_sizes, static_dir_dst_sizes;
+  NamedAttrList attrs;
+
+  // ind_src = ...
+  if (parser.parseKeyword("ind_src") || parser.parseEqual() ||
+      parseIndOperand(parser, ind_src_op, ind_src_idx, ind_src_map)) {
+    return failure();
+  }
+
+  // dir_src = memref[indices] size [...]
+  if (parser.parseKeyword("dir_src") || parser.parseEqual() ||
+      parser.parseOperand(dir_src_op)) {
+    return failure();
+  }
+  if (!parser.parseOptionalLSquare()) {
+    if (parser.parseAffineMapOfSSAIds(dir_src_indices, dir_src_map, "map",
+                                      attrs,
+                                      OpAsmParser::Delimiter::None) ||
+        parser.parseRSquare()) {
+      return failure();
+    }
+  }
+  if (!parser.parseOptionalKeyword("size") &&
+      parseDynamicIndexList(parser, dir_src_sizes, static_dir_src_sizes)) {
+    return failure();
+  }
+
+  // ind_dst = ...
+  if (parser.parseKeyword("ind_dst") || parser.parseEqual() ||
+      parseIndOperand(parser, ind_dst_op, ind_dst_idx, ind_dst_map)) {
+    return failure();
+  }
+
+  // dir_dst = (memref|fifo)[indices] size [...]
+  if (parser.parseKeyword("dir_dst") || parser.parseEqual() ||
+      parser.parseOperand(dir_dst_op)) {
+    return failure();
+  }
+  if (!parser.parseOptionalLSquare()) {
+    if (parser.parseAffineMapOfSSAIds(dir_dst_indices, dir_dst_map, "map",
+                                      attrs,
+                                      OpAsmParser::Delimiter::None) ||
+        parser.parseRSquare()) {
+      return failure();
+    }
+  }
+  if (!parser.parseOptionalKeyword("size") &&
+      parseDynamicIndexList(parser, dir_dst_sizes, static_dir_dst_sizes)) {
+    return failure();
+  }
+
+  if (parser.parseOptionalAttrDict(result.attributes)) {
+    return failure();
+  }
+
+  // Type list: [ind_src_type ,] dir_src_type , dir_dst_type
+  // ind_src_type is present only when ind_src_op was parsed.
+  if (parser.parseColon()) {
+    return failure();
+  }
+
+  Type ind_src_type, dir_src_type, dir_dst_type;
+  if (ind_src_op) {
+    if (parser.parseType(ind_src_type) || parser.parseComma()) {
+      return failure();
+    }
+  }
+  if (parser.parseType(dir_src_type) || parser.parseComma() ||
+      parser.parseType(dir_dst_type)) {
+    return failure();
+  }
+
+  // Similarly, ind_dst_type is inferred from ind_dst_op when present.
+  Type ind_dst_type;
+  if (ind_dst_op) {
+    // ind_dst type must match ind_src type syntactically when both present,
+    // but the verifier rejects that case. Use index_type as a placeholder
+    // for the index; the memref type is embedded separately.
+    // We require a 4th type entry when ind_dst is present.
+    if (parser.parseComma() || parser.parseType(ind_dst_type)) {
+      return failure();
+    }
+  }
+
+  // Resolve operands ---------------------------------------------------------
+
+  // AttrSizedOperandSegments order must match the `arguments` order in .td:
+  //   ind_src_memref, ind_src_index,
+  //   dir_src, dir_src_indices, dir_src_sizes,
+  //   ind_dst_memref, ind_dst_index,
+  //   dir_dst, dir_dst_indices, dir_dst_sizes
+
+  int32_t num_ind_src_mem = ind_src_op ? 1 : 0;
+  int32_t num_ind_src_idx = ind_src_op ? 1 : 0;
+  int32_t num_ind_dst_mem = ind_dst_op ? 1 : 0;
+  int32_t num_ind_dst_idx = ind_dst_op ? 1 : 0;
+
+  if (ind_src_op &&
+      (parser.resolveOperand(*ind_src_op, ind_src_type, result.operands) ||
+       parser.resolveOperand(*ind_src_idx, index_type, result.operands))) {
+    return failure();
+  }
+  if (parser.resolveOperand(dir_src_op, dir_src_type, result.operands) ||
+      parser.resolveOperands(dir_src_indices, index_type, result.operands) ||
+      parser.resolveOperands(dir_src_sizes, index_type, result.operands)) {
+    return failure();
+  }
+  if (ind_dst_op &&
+      (parser.resolveOperand(*ind_dst_op, ind_dst_type, result.operands) ||
+       parser.resolveOperand(*ind_dst_idx, index_type, result.operands))) {
+    return failure();
+  }
+  if (parser.resolveOperand(dir_dst_op, dir_dst_type, result.operands) ||
+      parser.resolveOperands(dir_dst_indices, index_type, result.operands) ||
+      parser.resolveOperands(dir_dst_sizes, index_type, result.operands)) {
+    return failure();
+  }
+
+  // AttrSizedOperandSegments attribute
+  result.addAttribute(
+      IndDataTransferOp::getOperandSegmentSizesAttrName(result.name),
+      builder.getDenseI32ArrayAttr(
+          {num_ind_src_mem,
+           num_ind_src_idx,
+           /*dir_src=*/1,
+           static_cast<int32_t>(dir_src_indices.size()),
+           static_cast<int32_t>(dir_src_sizes.size()),
+           num_ind_dst_mem,
+           num_ind_dst_idx,
+           /*dir_dst=*/1,
+           static_cast<int32_t>(dir_dst_indices.size()),
+           static_cast<int32_t>(dir_dst_sizes.size())}));
+
+  // Optional attributes
+  if (ind_src_map)
+    result.addAttribute(
+        IndDataTransferOp::getIndSrcMapAttrName(result.name), ind_src_map);
+  if (dir_src_map)
+    result.addAttribute(
+        IndDataTransferOp::getDirSrcMapAttrName(result.name), dir_src_map);
+  if (ind_dst_map)
+    result.addAttribute(
+        IndDataTransferOp::getIndDstMapAttrName(result.name), ind_dst_map);
+  if (dir_dst_map)
+    result.addAttribute(
+        IndDataTransferOp::getDirDstMapAttrName(result.name), dir_dst_map);
+  if (static_dir_src_sizes)
+    result.addAttribute(
+        IndDataTransferOp::getStaticDirSrcSizesAttrName(result.name),
+        static_dir_src_sizes);
+  if (static_dir_dst_sizes)
+    result.addAttribute(
+        IndDataTransferOp::getStaticDirDstSizesAttrName(result.name),
+        static_dir_dst_sizes);
+
+  return success();
+}
+
+void IndDataTransferOp::print(OpAsmPrinter& printer) {
+  // ind_src = ...
+  printer << "\n    ind_src = ";
+  printIndOperand(printer, getIndSrcMemref(), getIndSrcIndex(),
+                  getIndSrcMapAttr());
+
+  // dir_src = ...
+  printer << "\n    dir_src = " << getDirSrc();
+  if (auto map = getDirSrcMapAttr()) {
+    printer << "[";
+    printer.printAffineMapOfSSAIds(map, getDirSrcIndices());
+    printer << "]";
+  }
+  if (getStaticDirSrcSizes()) {
+    printer << " size ";
+    printDynamicIndexList(printer, *this, getDirSrcSizes(),
+                          *getStaticDirSrcSizes());
+  }
+
+  // ind_dst = ...
+  printer << "\n    ind_dst = ";
+  printIndOperand(printer, getIndDstMemref(), getIndDstIndex(),
+                  getIndDstMapAttr());
+
+  // dir_dst = ...
+  printer << "\n    dir_dst = " << getDirDst();
+  if (auto map = getDirDstMapAttr()) {
+    printer << "[";
+    printer.printAffineMapOfSSAIds(map, getDirDstIndices());
+    printer << "]";
+  }
+  if (getStaticDirDstSizes()) {
+    printer << " size ";
+    printDynamicIndexList(printer, *this, getDirDstSizes(),
+                          *getStaticDirDstSizes());
+  }
+
+  printer.printOptionalAttrDict(
+      (*this)->getAttrs(),
+      /*elidedAttrs=*/{
+          getOperandSegmentSizesAttrName(),
+          getIndSrcMapAttrName(),
+          getDirSrcMapAttrName(),
+          getIndDstMapAttrName(),
+          getDirDstMapAttrName(),
+          getStaticDirSrcSizesAttrName(),
+          getStaticDirDstSizesAttrName(),
+      });
+
+  // Type list
+  printer << "\n    : ";
+  if (auto ind_src = getIndSrcMemref()) {
+    printer << ind_src.getType() << ", ";
+  }
+  printer << getDirSrc().getType() << ", " << getDirDst().getType();
+  if (auto ind_dst = getIndDstMemref()) {
+    printer << ", " << ind_dst.getType();
+  }
+}
+
+void IndDataTransferOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>&
+        effects) {
+  // Only memref operands carry MemoryEffects — FIFO slots are dataflow tokens
+  // and are intentionally excluded (consistent with OpaqueOp::getEffects).
+  //
+  // Effect assignment:
+  //   ind_src_memref: Read  — IAB is read to obtain the gather source address
+  //   dir_src:        Read  — data source
+  //   ind_dst_memref: Read  — IAB is read to obtain the scatter dest address
+  //   dir_dst memref: Write — data destination (absent when dir_dst is a FIFO)
+  for (auto& operand : (*this)->getOpOperands()) {
+    if (!isa<MemRefType>(operand.get().getType())) {
+      continue;
+    }
+    if (operand.get() == getDirDst()) {
+      effects.emplace_back(MemoryEffects::Write::get(), &operand,
+                           SideEffects::DefaultResource::get());
+    } else {
+      effects.emplace_back(MemoryEffects::Read::get(), &operand,
+                           SideEffects::DefaultResource::get());
+    }
+  }
+}
+
+auto IndDataTransferOp::verify() -> LogicalResult {
+  const bool has_ind_src = static_cast<bool>(getIndSrcMemref());
+  const bool has_ind_dst = static_cast<bool>(getIndDstMemref());
+
+  if (has_ind_src == has_ind_dst) {
+    return emitOpError(
+        "exactly one of 'ind_src' / 'ind_dst' must be present (got "
+        + Twine(has_ind_src ? "both" : "neither") + ")");
+  }
+
+  // Reusable helper: verify one memref side's map, indices, and sizes.
+  const auto verify_memref_side =
+      [&](Twine name, MemRefType type, std::optional<AffineMap> map,
+          OperandRange indices,
+          std::optional<ArrayRef<int64_t>> static_sizes) -> LogicalResult {
+    if (!map) {
+      return emitOpError("'") << name << "' map must be present for a memref";
+    }
+    if (map->getNumSymbols() != 0) {
+      return emitOpError("'") << name << "' map must have 0 symbols (dims-only); got "
+                              << map->getNumSymbols();
+    }
+    if (map->getNumResults() != static_cast<unsigned>(type.getRank())) {
+      return emitOpError("'") << name << "' memref has rank " << type.getRank()
+                              << " but map has " << map->getNumResults() << " results";
+    }
+    if (indices.size() != map->getNumDims()) {
+      return emitOpError("'") << name << "' indices count (" << indices.size()
+                              << ") must match map dim count ("
+                              << map->getNumDims() << ")";
+    }
+    if (static_sizes &&
+        static_sizes->size() != static_cast<unsigned>(type.getRank())) {
+      return emitOpError("'") << name << "' size count (" << static_sizes->size()
+                              << ") must match memref rank (" << type.getRank() << ")";
+    }
+    return success();
+  };
+
+  // Reusable helper: verify dynamic size operand count vs. static sentinel count.
+  const auto verify_dynamic_sizes =
+      [&](Twine name, OperandRange dynamic_sizes,
+          std::optional<ArrayRef<int64_t>> static_sizes) -> LogicalResult {
+    if (!static_sizes) return success();
+    const unsigned num_dynamic = llvm::count_if(
+        *static_sizes, [](int64_t v) { return ShapedType::isDynamic(v); });
+    if (dynamic_sizes.size() != num_dynamic) {
+      return emitOpError("number of dynamic '") << name << "' sizes ("
+          << dynamic_sizes.size()
+          << ") must match number of dynamic entries in static_" << name
+          << "_sizes (" << num_dynamic << ")";
+    }
+    return success();
+  };
+
+  // When ind_src is present (gather), dir_src must be a memref: the IAB entry
+  // resolves the base address in memory, so the direct source must be concrete.
+  if (has_ind_src && !isa<MemRefType>(getDirSrc().getType())) {
+    return emitOpError(
+        "'dir_src' must be a memref when 'ind_src' is present (gather mode)");
+  }
+
+  // When ind_dst is present (scatter), dir_dst must be a memref: the IAB entry
+  // resolves the base address in memory, so the direct destination must be concrete.
+  if (has_ind_dst && !isa<MemRefType>(getDirDst().getType())) {
+    return emitOpError(
+        "'dir_dst' must be a memref when 'ind_dst' is present (scatter mode)");
+  }
+
+  // Validate dir_src when it is a memref.
+  if (auto src_memref = llvm::dyn_cast<MemRefType>(getDirSrc().getType())) {
+    if (failed(verify_memref_side("dir_src", src_memref,
+                                  getDirSrcMap(), getDirSrcIndices(),
+                                  getStaticDirSrcSizes())) ||
+        failed(verify_dynamic_sizes("dir_src", getDirSrcSizes(),
+                                    getStaticDirSrcSizes()))) {
+      return failure();
+    }
+  }
+
+  // Validate dir_dst when it is a memref.
+  if (auto dst_memref = llvm::dyn_cast<MemRefType>(getDirDst().getType())) {
+    if (failed(verify_memref_side("dir_dst", dst_memref,
+                                  getDirDstMap(), getDirDstIndices(),
+                                  getStaticDirDstSizes())) ||
+        failed(verify_dynamic_sizes("dir_dst", getDirDstSizes(),
+                                    getStaticDirDstSizes()))) {
+      return failure();
+    }
+  }
+
+  return success();
+}
+
+auto IndDataTransferOp::getAffineMapAttrForMemRef(Value memref)
+    -> NamedAttribute {
+  if (memref == getIndSrcMemref()) {
+    return {getIndSrcMapAttrName(), getIndSrcMapAttr()};
+  }
+  if (memref == getDirSrc()) {
+    return {getDirSrcMapAttrName(), getDirSrcMapAttr()};
+  }
+  if (memref == getIndDstMemref()) {
+    return {getIndDstMapAttrName(), getIndDstMapAttr()};
+  }
+  assert(memref == getDirDst() &&
+         "memref must be one of the memref operands of this op");
+  return {getDirDstMapAttrName(), getDirDstMapAttr()};
+}
+
+// Build with OpFoldResult sizes.
+void IndDataTransferOp::build(
+    OpBuilder& builder, OperationState& state,
+    Value ind_src_memref, Value ind_src_index,
+    Value dir_src, AffineMap dir_src_map,
+    ValueRange dir_src_indices, ArrayRef<OpFoldResult> dir_src_sizes,
+    Value ind_dst_memref, Value ind_dst_index,
+    Value dir_dst, AffineMap dir_dst_map,
+    ValueRange dir_dst_indices, ArrayRef<OpFoldResult> dir_dst_sizes) {
+  SmallVector<Value> dyn_src_sizes;
+  SmallVector<int64_t> static_src_sizes;
+  dispatchIndexOpFoldResults(dir_src_sizes, dyn_src_sizes, static_src_sizes);
+
+  SmallVector<Value> dyn_dst_sizes;
+  SmallVector<int64_t> static_dst_sizes;
+  dispatchIndexOpFoldResults(dir_dst_sizes, dyn_dst_sizes, static_dst_sizes);
+
+  // Delegate to the tablegen-generated base build. Optional<T> fields are
+  // passed as a nullable Value (Value{} == absent).
+  build(builder, state,
+        /*ind_src_memref=*/ind_src_memref,
+        /*ind_src_index=*/ind_src_index,
+        /*dir_src=*/dir_src,
+        /*dir_src_indices=*/dir_src_indices,
+        /*dir_src_sizes=*/dyn_src_sizes,
+        /*ind_dst_memref=*/ind_dst_memref,
+        /*ind_dst_index=*/ind_dst_index,
+        /*dir_dst=*/dir_dst,
+        /*dir_dst_indices=*/dir_dst_indices,
+        /*dir_dst_sizes=*/dyn_dst_sizes,
+        /*dir_src_map=*/dir_src_map ? AffineMapAttr::get(dir_src_map)
+                                    : AffineMapAttr(),
+        /*dir_dst_map=*/dir_dst_map ? AffineMapAttr::get(dir_dst_map)
+                                    : AffineMapAttr(),
+        /*ind_src_map=*/AffineMapAttr(),
+        /*ind_dst_map=*/AffineMapAttr(),
+        /*static_dir_src_sizes=*/
+        builder.getDenseI64ArrayAttr(static_src_sizes),
+        /*static_dir_dst_sizes=*/
+        builder.getDenseI64ArrayAttr(static_dst_sizes));
+}
+
+// Build with all-static sizes.
+void IndDataTransferOp::build(
+    OpBuilder& builder, OperationState& state,
+    Value ind_src_memref, Value ind_src_index,
+    Value dir_src, AffineMap dir_src_map,
+    ValueRange dir_src_indices, ArrayRef<int64_t> dir_src_sizes,
+    Value ind_dst_memref, Value ind_dst_index,
+    Value dir_dst, AffineMap dir_dst_map,
+    ValueRange dir_dst_indices, ArrayRef<int64_t> dir_dst_sizes) {
+  const auto to_ofr =
+      [&](int64_t v) -> OpFoldResult { return builder.getI64IntegerAttr(v); };
+  build(builder, state,
+        ind_src_memref, ind_src_index,
+        dir_src, dir_src_map, dir_src_indices,
+        llvm::map_to_vector(dir_src_sizes, to_ofr),
+        ind_dst_memref, ind_dst_index,
+        dir_dst, dir_dst_map, dir_dst_indices,
+        llvm::map_to_vector(dir_dst_sizes, to_ofr));
+}
+
+
+
+>>>>>>> 00ff2d5 (add ktdf.ind_data_transfer op + add memory effect interface to ktdf.data_transfer)
+//===----------------------------------------------------------------------===//
 // ReadFromFifoOp
 //===----------------------------------------------------------------------===//
 
