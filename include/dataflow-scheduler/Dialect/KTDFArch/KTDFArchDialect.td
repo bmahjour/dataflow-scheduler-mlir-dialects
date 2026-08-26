@@ -163,7 +163,7 @@ def KTDFArch_Dialect : Dialect {
 
   defvar intrinsicFeatures = [
     KTDFArch_IntrinsicFeature<"compute">,
-    KTDFArch_IntrinsicFeature<"indirect_address_buffer", "IndirectAddressBuffer">,
+    KTDFArch_IntrinsicFeature<"indirect_address_buffer">,
     KTDFArch_IntrinsicFeature<"load">,
     KTDFArch_IntrinsicFeature<"simd", "SIMD">,
     KTDFArch_IntrinsicFeature<"store">,
