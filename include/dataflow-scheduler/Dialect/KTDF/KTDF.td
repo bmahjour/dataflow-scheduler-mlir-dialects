@@ -818,7 +818,7 @@ def KTDF_IndDataTransferOp : KTDF_Op<"ind_data_transfer", [
         `dir_src` `=` ssa-value (`[` ssa-use-list `]`)? (`size` `[` ssa-use-list `]`)?
         (`ind_dst` `=` ssa-value `[` ssa-value `]` | `ind_dst` `=` `none`)
         `dir_dst` `=` ssa-value (`[` ssa-use-list `]`)? (`size` `[` ssa-use-list `]`)?
-        `:` type(ind_src_memref)? `,` type(dir_src) `,` type(dir_dst)
+        `:` (type(ind_src_memref) | `none`) `,` type(dir_src) `,` (type(ind_dst_memref) | `none`) `,` type(dir_dst)
     ```
 
     ## Examples
@@ -832,6 +832,7 @@ def KTDF_IndDataTransferOp : KTDF_Op<"ind_data_transfer", [
         dir_dst = %fifo_slot           size [2, 64]
         : memref<32xindex, strided<[1], offset: ?>, "ct_iab">,
           memref<64x2x64xf16, strided<[64, 4096, 1], offset: ?>, "global">,
+          none,
           !ktdf.fifo.slot<"ct_load" -> "ct_compute", 128xf16>
 
     // Gather: IAB entry drives the source; destination is a local staging buffer
@@ -843,6 +844,7 @@ def KTDF_IndDataTransferOp : KTDF_Op<"ind_data_transfer", [
         dir_dst = %staging[%c0, %c0]   size [2, 64]
         : memref<32xindex, strided<[1], offset: ?>, "ct_iab">,
           memref<64x2x64xf16, strided<[64, 4096, 1], offset: ?>, "global">,
+          none,
           memref<2x64xf16, "ct_local">
     ```
   }];
@@ -873,7 +875,14 @@ def KTDF_IndDataTransferOp : KTDF_Op<"ind_data_transfer", [
   );
 
   let hasVerifier = 1;
-  let hasCustomAssemblyFormat = 1;
+  let assemblyFormat = [{
+    `\n`
+    `ind_src` `=` ($ind_src_memref^ `[` $ind_src_index `]`):(`none`)? `\n`
+    `dir_src` `=` custom<CellOrSlot>($dir_src, $dir_src_indices, $dir_src_map, $dir_src_sizes, $static_dir_src_sizes) `\n`
+    `ind_dst` `=` ($ind_dst_memref^ `[` $ind_dst_index `]`):(`none`)? `\n`
+    `dir_dst` `=` custom<CellOrSlot>($dir_dst, $dir_dst_indices, $dir_dst_map, $dir_dst_sizes, $static_dir_dst_sizes) `\n`
+    attr-dict `:` custom<IndTransferTypes>(type($ind_src_memref), type($dir_src), type($ind_dst_memref), type($dir_dst))
+  }];
 
   let builders = [
     // Full builder with OpFoldResult sizes.

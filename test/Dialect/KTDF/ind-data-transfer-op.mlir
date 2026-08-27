@@ -13,7 +13,7 @@ func.func @test_ind_data_transfer_gather_to_fifo() {
   // CHECK-NEXT: dir_src = %{{.*}}[%{{.*}}, %{{.*}}, %{{.*}}] size [1, 2, 64]
   // CHECK-NEXT: ind_dst = none
   // CHECK-NEXT: dir_dst = %{{.*}} size [2, 64]
-  // CHECK-NEXT: : memref<32xindex, "ct_iab">, memref<64x2x64xf16, "global">, !ktdf.fifo.slot<"ct_load" -> "ct_compute", 128xf16>
+  // CHECK-NEXT: : memref<32xindex, "ct_iab">, memref<64x2x64xf16, "global">, none, !ktdf.fifo.slot<"ct_load" -> "ct_compute", 128xf16>
   ktdf.ind_data_transfer
       ind_src = %iab[%c1]
       dir_src = %data[%c0, %c0, %c0] size [1, 2, 64]
@@ -21,6 +21,7 @@ func.func @test_ind_data_transfer_gather_to_fifo() {
       dir_dst = %slot                 size [2, 64]
       : memref<32xindex, "ct_iab">,
         memref<64x2x64xf16, "global">,
+        none,
         !ktdf.fifo.slot<"ct_load" -> "ct_compute", 128xf16>
   return
 }
@@ -38,7 +39,7 @@ func.func @test_ind_data_transfer_gather_to_memref() {
   // CHECK-NEXT: dir_src = %{{.*}}[%{{.*}}, %{{.*}}, %{{.*}}] size [1, 2, 64]
   // CHECK-NEXT: ind_dst = none
   // CHECK-NEXT: dir_dst = %{{.*}}[%{{.*}}, %{{.*}}] size [2, 64]
-  // CHECK-NEXT: : memref<32xindex, "ct_iab">, memref<64x2x64xf16, "global">, memref<2x64xf16, "ct_local">
+  // CHECK-NEXT: : memref<32xindex, "ct_iab">, memref<64x2x64xf16, "global">, none, memref<2x64xf16, "ct_local">
   ktdf.ind_data_transfer
       ind_src = %iab[%c1]
       dir_src = %data[%c0, %c0, %c0]    size [1, 2, 64]
@@ -46,6 +47,7 @@ func.func @test_ind_data_transfer_gather_to_memref() {
       dir_dst = %staging[%c0, %c0]      size [2, 64]
       : memref<32xindex, "ct_iab">,
         memref<64x2x64xf16, "global">,
+        none,
         memref<2x64xf16, "ct_local">
   return
 }
@@ -63,15 +65,16 @@ func.func @test_ind_data_transfer_scatter() {
   // CHECK-NEXT: dir_src = %{{.*}}[%{{.*}}, %{{.*}}] size [2, 64]
   // CHECK-NEXT: ind_dst = %{{.*}}[%{{.*}}]
   // CHECK-NEXT: dir_dst = %{{.*}}[%{{.*}}, %{{.*}}, %{{.*}}] size [1, 2, 64]
-  // CHECK-NEXT: : memref<2x64xf16, "ct_local">, memref<64x2x64xf16, "global">, memref<32xindex, "ct_iab">
+  // CHECK-NEXT: : none, memref<2x64xf16, "ct_local">, memref<32xindex, "ct_iab">, memref<64x2x64xf16, "global">
   ktdf.ind_data_transfer
       ind_src = none
       dir_src = %staging[%c0, %c0]      size [2, 64]
       ind_dst = %iab[%c1]
       dir_dst = %dst[%c0, %c0, %c0]     size [1, 2, 64]
-      : memref<2x64xf16, "ct_local">,
-        memref<64x2x64xf16, "global">,
-        memref<32xindex, "ct_iab">
+      : none,
+        memref<2x64xf16, "ct_local">,
+        memref<32xindex, "ct_iab">,
+        memref<64x2x64xf16, "global">
   return
 }
 
@@ -103,6 +106,7 @@ func.func @test_ind_data_transfer_in_pipeline() {
           dir_dst = %prv#0               size [2, 64]
           : memref<32xindex, "ct_iab">,
             memref<64x2x64xf16, "global">,
+            none,
             !ktdf.fifo.slot<"ct_load" -> "ct_compute", 128xf16>
     }
   }
