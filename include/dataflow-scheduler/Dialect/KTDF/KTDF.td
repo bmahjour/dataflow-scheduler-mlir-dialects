@@ -903,52 +903,30 @@ def KTDF_IndDataTransferOp : KTDF_Op<"ind_data_transfer", [
 
     /// Get the mixed dir_src sizes (combining static and dynamic).
     SmallVector<OpFoldResult> getMixedDirSrcSizes() {
-      SmallVector<OpFoldResult> result;
-      if (auto staticSizes = getStaticDirSrcSizes()) {
-        unsigned dynamicIdx = 0;
-        for (int64_t size : *staticSizes) {
-          if (ShapedType::isDynamic(size))
-            result.push_back(getDirSrcSizes()[dynamicIdx++]);
-          else
-            result.push_back(IntegerAttr::get(IndexType::get(getContext()), size));
-        }
-      } else {
-        for (Value size : getDirSrcSizes())
-          result.push_back(size);
-      }
-      return result;
+      if (auto staticSizes = getStaticDirSrcSizes())
+        return getMixedValues(*staticSizes, getDirSrcSizes(), getContext());
+      return llvm::to_vector(llvm::map_range(getDirSrcSizes(),
+          [](Value v) { return OpFoldResult{v}; }));
     }
 
     /// Get the mixed dir_dst sizes (combining static and dynamic).
     SmallVector<OpFoldResult> getMixedDirDstSizes() {
-      SmallVector<OpFoldResult> result;
-      if (auto staticSizes = getStaticDirDstSizes()) {
-        unsigned dynamicIdx = 0;
-        for (int64_t size : *staticSizes) {
-          if (ShapedType::isDynamic(size))
-            result.push_back(getDirDstSizes()[dynamicIdx++]);
-          else
-            result.push_back(IntegerAttr::get(IndexType::get(getContext()), size));
-        }
-      } else {
-        for (Value size : getDirDstSizes())
-          result.push_back(size);
-      }
-      return result;
+      if (auto staticSizes = getStaticDirDstSizes())
+        return getMixedValues(*staticSizes, getDirDstSizes(), getContext());
+      return llvm::to_vector(llvm::map_range(getDirDstSizes(),
+          [](Value v) { return OpFoldResult{v}; }));
     }
 
     /// Returns true if all dir_src sizes are static.
     bool hasAllStaticDirSrcSizes() {
       if (!getStaticDirSrcSizes()) return false;
-      return llvm::none_of(*getStaticDirSrcSizes(),
-                           [](int64_t s) { return ShapedType::isDynamic(s); });
+      return ShapedType::isStaticShape(*getStaticDirSrcSizes());
     }
 
     /// Returns true if all dir_dst sizes are static.
     bool hasAllStaticDirDstSizes() {
       if (!getStaticDirDstSizes()) return false;
-      return llvm::none_of(*getStaticDirDstSizes(),
-                           [](int64_t s) { return ShapedType::isDynamic(s); });
+      return ShapedType::isStaticShape(*getStaticDirDstSizes());
     }
 
     /// Get dir_src sizes as static integers, or std::nullopt if any is dynamic.

@@ -54,12 +54,12 @@ void KTDFDialect::registerOps() {
 
 namespace {
 
-auto parseCellOrSlot(OpAsmParser& parser,
-                     OpAsmParser::UnresolvedOperand& operand,
-                     SmallVectorImpl<OpAsmParser::UnresolvedOperand>& indices,
-                     AffineMapAttr& map,
-                     SmallVectorImpl<OpAsmParser::UnresolvedOperand>& sizes,
-                     DenseI64ArrayAttr& static_sizes) -> ParseResult {
+auto parseCellOrSlot(OpAsmParser &parser,
+                     OpAsmParser::UnresolvedOperand &operand,
+                     SmallVectorImpl<OpAsmParser::UnresolvedOperand> &indices,
+                     AffineMapAttr &map,
+                     SmallVectorImpl<OpAsmParser::UnresolvedOperand> &sizes,
+                     DenseI64ArrayAttr &static_sizes) -> ParseResult {
   NamedAttrList attrs;
   if (parser.parseOperand(operand)) {
     return failure();
@@ -79,7 +79,7 @@ auto parseCellOrSlot(OpAsmParser& parser,
                  parseDynamicIndexList(parser, sizes, static_sizes));
 };
 
-void printCellOrSlot(OpAsmPrinter& printer, Operation* op, Value operand,
+void printCellOrSlot(OpAsmPrinter &printer, Operation *op, Value operand,
                      OperandRange indices, AffineMapAttr map,
                      OperandRange sizes, DenseI64ArrayAttr static_sizes) {
   printer << operand;
@@ -97,13 +97,13 @@ void printCellOrSlot(OpAsmPrinter& printer, Operation* op, Value operand,
 }
 
 template <class Range, class T>
-auto allEqualTo(const T& value, Range&& range) -> bool {
-  return llvm::all_of(range, [&](const auto&& item) { return value == item; });
+auto allEqualTo(const T &value, Range &&range) -> bool {
+  return llvm::all_of(range, [&](const auto &&item) { return value == item; });
 }
 
 auto parseBracketPairList(
-    OpAsmParser& parser, SmallVectorImpl<OpAsmParser::UnresolvedOperand>& first,
-    SmallVectorImpl<OpAsmParser::UnresolvedOperand>& second) -> ParseResult {
+    OpAsmParser &parser, SmallVectorImpl<OpAsmParser::UnresolvedOperand> &first,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &second) -> ParseResult {
   while (succeeded(parser.parseOptionalLSquare())) {
     if (parser.parseOperand(first.emplace_back()) || parser.parseColon() ||
         parser.parseOperand(second.emplace_back()) || parser.parseRSquare()) {
@@ -115,7 +115,7 @@ auto parseBracketPairList(
   return success();
 }
 
-void printBracketPairList(OpAsmPrinter& printer, Operation* /*op*/,
+void printBracketPairList(OpAsmPrinter &printer, Operation * /*op*/,
                           ValueRange first, ValueRange second) {
   llvm::interleaveComma(llvm::zip_equal(first, second), printer,
                         [&](auto pair) {
@@ -124,7 +124,7 @@ void printBracketPairList(OpAsmPrinter& printer, Operation* /*op*/,
                         });
 }
 
-}  // namespace
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // Tablegen Definitions
@@ -137,7 +137,7 @@ void printBracketPairList(OpAsmPrinter& printer, Operation* /*op*/,
 // TilingDeriveSizeOp
 //===----------------------------------------------------------------------===//
 
-auto TilingDeriveSizeOp::parse(OpAsmParser& parser, OperationState& result)
+auto TilingDeriveSizeOp::parse(OpAsmParser &parser, OperationState &result)
     -> ParseResult {
   SmallVector<OpAsmParser::UnresolvedOperand> ivs;
   SmallVector<OpAsmParser::UnresolvedOperand> tile_sizes;
@@ -158,7 +158,7 @@ auto TilingDeriveSizeOp::parse(OpAsmParser& parser, OperationState& result)
   return success();
 }
 
-void TilingDeriveSizeOp::print(OpAsmPrinter& printer) {
+void TilingDeriveSizeOp::print(OpAsmPrinter &printer) {
   printer << " ";
   printBracketPairList(printer, *this, getIvs(), getTileSizes());
   if (!getIvs().empty()) {
@@ -246,9 +246,9 @@ auto PipelineOp::getNumStages() -> unsigned {
   return static_cast<unsigned>(llvm::range_size(getStages()));
 }
 
-void PipelineOp::build(OpBuilder& builder, OperationState& state,
-                       function_ref<void(OpBuilder&, Location)> body_builder) {
-  auto& body = state.addRegion()->emplaceBlock();
+void PipelineOp::build(OpBuilder &builder, OperationState &state,
+                       function_ref<void(OpBuilder &, Location)> body_builder) {
+  auto &body = state.addRegion()->emplaceBlock();
 
   if (body_builder) {
     OpBuilder::InsertionGuard guard(builder);
@@ -260,8 +260,8 @@ void PipelineOp::build(OpBuilder& builder, OperationState& state,
 auto PipelineOp::verifyRegions() -> LogicalResult {
   // Verify that all immediate children are StageOp or PrivateOp, and that there
   // is at most one PrivateOp.
-  Operation* private_op = nullptr;
-  for (auto& op : *getBody()) {
+  Operation *private_op = nullptr;
+  for (auto &op : *getBody()) {
     if (isa<PrivateOp>(op)) {
       if (private_op) {
         auto diag = emitOpError(
@@ -306,10 +306,10 @@ auto FifoAllocateOp::verify() -> LogicalResult {
   return success();
 }
 
-void FifoAllocateOp::getCanonicalizationPatterns(RewritePatternSet& results,
-                                                 MLIRContext*) {
+void FifoAllocateOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                                 MLIRContext *) {
   results.add(
-      +[](FifoAllocateOp op, PatternRewriter& rewriter) -> LogicalResult {
+      +[](FifoAllocateOp op, PatternRewriter &rewriter) -> LogicalResult {
         if (op->getUses().empty()) {
           rewriter.eraseOp(op);
         }
@@ -326,7 +326,7 @@ namespace {
 // Helper function to check if a value originates from create_token or private
 // operation yielding a token
 auto isValidTokenSource(Value token_value) -> bool {
-  return llvm::TypeSwitch<Operation*, bool>(token_value.getDefiningOp())
+  return llvm::TypeSwitch<Operation *, bool>(token_value.getDefiningOp())
       .Case([](CreateTokenOp) { return true; })
       .Case([&](PrivateOp op) {
         const auto result_number =
@@ -336,7 +336,7 @@ auto isValidTokenSource(Value token_value) -> bool {
       .Default(false);
 }
 
-}  // namespace
+} // namespace
 
 auto StageOp::verify() -> LogicalResult {
   // FIXME: Following def-use chains in verifiers is not allowed as per the
@@ -366,16 +366,16 @@ auto StageOp::verify() -> LogicalResult {
   return success();
 }
 
-void StageOp::build(OpBuilder& builder, OperationState& state,
+void StageOp::build(OpBuilder &builder, OperationState &state,
                     ValueRange depends_in, ValueRange depends_out,
-                    function_ref<void(OpBuilder&, Location)> body_builder) {
+                    function_ref<void(OpBuilder &, Location)> body_builder) {
   state.addOperands(depends_in);
   state.addOperands(depends_out);
   state.addAttribute(
       getOperandSegmentSizesAttrName(state.name),
       builder.getDenseI32ArrayAttr({static_cast<int32_t>(depends_in.size()),
                                     static_cast<int32_t>(depends_out.size())}));
-  auto& body = state.addRegion()->emplaceBlock();
+  auto &body = state.addRegion()->emplaceBlock();
 
   if (body_builder) {
     OpBuilder::InsertionGuard guard(builder);
@@ -477,7 +477,7 @@ auto PrivateOp::verifyRegions() -> LogicalResult {
 }
 
 void PrivateOp::getSuccessorRegions(RegionBranchPoint point,
-                                    SmallVectorImpl<RegionSuccessor>& regions) {
+                                    SmallVectorImpl<RegionSuccessor> &regions) {
   if (!point.isParent()) {
     regions.emplace_back(getOperation(), getResults());
     return;
@@ -591,7 +591,7 @@ auto DataTransferOp::getAffineMapAttrForMemRef(Value memref) -> NamedAttribute {
 // on the final IR. The builder does not assert on construction because
 // transient IR may legitimately reference access-tile-typed values that
 // will be lowered to memrefs later in the pipeline.
-void DataTransferOp::build(OpBuilder& builder, OperationState& state,
+void DataTransferOp::build(OpBuilder &builder, OperationState &state,
                            Value source, AffineMap source_map,
                            ValueRange source_indices,
                            ArrayRef<OpFoldResult> source_sizes,
@@ -616,7 +616,7 @@ void DataTransferOp::build(OpBuilder& builder, OperationState& state,
 }
 
 // Build with all static sizes.
-void DataTransferOp::build(OpBuilder& builder, OperationState& state,
+void DataTransferOp::build(OpBuilder &builder, OperationState &state,
                            Value source, AffineMap source_map,
                            ValueRange source_indices,
                            ArrayRef<int64_t> source_sizes, Value destination,
@@ -665,39 +665,31 @@ void DataTransferOp::getEffects(
 //   `none`                         → operand and index left unset
 //   ssa-value `[` ssa-value `]`    → operand and index set; affine map parsed
 //
-// Returns true if a non-none value was parsed (operand and index are filled),
-// false for `none`.
-static auto parseIndOperand(
-    OpAsmParser& parser,
-    std::optional<OpAsmParser::UnresolvedOperand>& operand,
-    std::optional<OpAsmParser::UnresolvedOperand>& index,
-    AffineMapAttr& map) -> ParseResult {
-  if (succeeded(parser.parseOptionalKeyword("none"))) {
+// Returns success in both cases; operand/index remain unset for `none`.
+static auto
+parseIndOperand(OpAsmParser &parser,
+                std::optional<OpAsmParser::UnresolvedOperand> &operand,
+                std::optional<OpAsmParser::UnresolvedOperand> &index,
+                AffineMapAttr &map) -> ParseResult {
+  if (succeeded(parser.parseOptionalKeyword("none")))
     return success();
-  }
   operand.emplace();
-  index.emplace();
-  NamedAttrList attrs;
-  // Reuse parseAffineMapOfSSAIds for consistency with DataTransferOp, but
-  // the IAB memref is always accessed with a single flat index, so the map
-  // will be a 1-result identity map resolved from one SSA dim.
-  SmallVector<OpAsmParser::UnresolvedOperand> idx_list;
-  if (parser.parseOperand(*operand) || parser.parseLSquare() ||
-      parser.parseAffineMapOfSSAIds(idx_list, map, "map", attrs,
-                                    OpAsmParser::Delimiter::None) ||
-      parser.parseRSquare()) {
+  SmallVector<OpAsmParser::UnresolvedOperand> idx_list, unused_sizes;
+  // Use parseCellOrSlot but throw away unused_* sizes, since ind operands carry
+  // no size clause.
+  DenseI64ArrayAttr unused_static_sizes;
+  if (parseCellOrSlot(parser, *operand, idx_list, map, unused_sizes,
+                      unused_static_sizes))
     return failure();
-  }
-  if (idx_list.size() != 1) {
+  if (idx_list.size() != 1)
     return parser.emitError(parser.getCurrentLocation(),
                             "expected exactly one index for ind operand");
-  }
-  *index = idx_list[0];
+  index.emplace(idx_list[0]);
   return success();
 }
 
-static void printIndOperand(OpAsmPrinter& printer, Value operand, Value index,
-                             AffineMapAttr map) {
+static void printIndOperand(OpAsmPrinter &printer, Value operand, Value index,
+                            AffineMapAttr map) {
   if (!operand) {
     printer << "none";
     return;
@@ -707,9 +699,9 @@ static void printIndOperand(OpAsmPrinter& printer, Value operand, Value index,
   printer << "]";
 }
 
-auto IndDataTransferOp::parse(OpAsmParser& parser, OperationState& result)
+auto IndDataTransferOp::parse(OpAsmParser &parser, OperationState &result)
     -> ParseResult {
-  auto& builder = parser.getBuilder();
+  auto &builder = parser.getBuilder();
   const auto index_type = builder.getIndexType();
 
   std::optional<OpAsmParser::UnresolvedOperand> ind_src_op, ind_src_idx;
@@ -734,8 +726,7 @@ auto IndDataTransferOp::parse(OpAsmParser& parser, OperationState& result)
   }
   if (!parser.parseOptionalLSquare()) {
     if (parser.parseAffineMapOfSSAIds(dir_src_indices, dir_src_map, "map",
-                                      attrs,
-                                      OpAsmParser::Delimiter::None) ||
+                                      attrs, OpAsmParser::Delimiter::None) ||
         parser.parseRSquare()) {
       return failure();
     }
@@ -758,8 +749,7 @@ auto IndDataTransferOp::parse(OpAsmParser& parser, OperationState& result)
   }
   if (!parser.parseOptionalLSquare()) {
     if (parser.parseAffineMapOfSSAIds(dir_dst_indices, dir_dst_map, "map",
-                                      attrs,
-                                      OpAsmParser::Delimiter::None) ||
+                                      attrs, OpAsmParser::Delimiter::None) ||
         parser.parseRSquare()) {
       return failure();
     }
@@ -836,47 +826,25 @@ auto IndDataTransferOp::parse(OpAsmParser& parser, OperationState& result)
     return failure();
   }
 
-  // AttrSizedOperandSegments attribute
-  result.addAttribute(
-      IndDataTransferOp::getOperandSegmentSizesAttrName(result.name),
-      builder.getDenseI32ArrayAttr(
-          {num_ind_src_mem,
-           num_ind_src_idx,
-           /*dir_src=*/1,
-           static_cast<int32_t>(dir_src_indices.size()),
-           static_cast<int32_t>(dir_src_sizes.size()),
-           num_ind_dst_mem,
-           num_ind_dst_idx,
-           /*dir_dst=*/1,
-           static_cast<int32_t>(dir_dst_indices.size()),
-           static_cast<int32_t>(dir_dst_sizes.size())}));
-
-  // Optional attributes
-  if (ind_src_map)
-    result.addAttribute(
-        IndDataTransferOp::getIndSrcMapAttrName(result.name), ind_src_map);
-  if (dir_src_map)
-    result.addAttribute(
-        IndDataTransferOp::getDirSrcMapAttrName(result.name), dir_src_map);
-  if (ind_dst_map)
-    result.addAttribute(
-        IndDataTransferOp::getIndDstMapAttrName(result.name), ind_dst_map);
-  if (dir_dst_map)
-    result.addAttribute(
-        IndDataTransferOp::getDirDstMapAttrName(result.name), dir_dst_map);
-  if (static_dir_src_sizes)
-    result.addAttribute(
-        IndDataTransferOp::getStaticDirSrcSizesAttrName(result.name),
-        static_dir_src_sizes);
-  if (static_dir_dst_sizes)
-    result.addAttribute(
-        IndDataTransferOp::getStaticDirDstSizesAttrName(result.name),
-        static_dir_dst_sizes);
+  auto& props = result.getOrAddProperties<IndDataTransferOp::Properties>();
+  props.operandSegmentSizes = {
+      num_ind_src_mem, num_ind_src_idx,
+      /*dir_src=*/1, static_cast<int32_t>(dir_src_indices.size()),
+      static_cast<int32_t>(dir_src_sizes.size()), num_ind_dst_mem,
+      num_ind_dst_idx,
+      /*dir_dst=*/1, static_cast<int32_t>(dir_dst_indices.size()),
+      static_cast<int32_t>(dir_dst_sizes.size())};
+  props.ind_src_map = ind_src_map;
+  props.dir_src_map = dir_src_map;
+  props.ind_dst_map = ind_dst_map;
+  props.dir_dst_map = dir_dst_map;
+  props.static_dir_src_sizes = static_dir_src_sizes;
+  props.static_dir_dst_sizes = static_dir_dst_sizes;
 
   return success();
 }
 
-void IndDataTransferOp::print(OpAsmPrinter& printer) {
+void IndDataTransferOp::print(OpAsmPrinter &printer) {
   // ind_src = ...
   printer << "\n    ind_src = ";
   printIndOperand(printer, getIndSrcMemref(), getIndSrcIndex(),
@@ -913,17 +881,16 @@ void IndDataTransferOp::print(OpAsmPrinter& printer) {
                           *getStaticDirDstSizes());
   }
 
-  printer.printOptionalAttrDict(
-      (*this)->getAttrs(),
-      /*elidedAttrs=*/{
-          getOperandSegmentSizesAttrName(),
-          getIndSrcMapAttrName(),
-          getDirSrcMapAttrName(),
-          getIndDstMapAttrName(),
-          getDirDstMapAttrName(),
-          getStaticDirSrcSizesAttrName(),
-          getStaticDirDstSizesAttrName(),
-      });
+  printer.printOptionalAttrDict((*this)->getAttrs(),
+                                /*elidedAttrs=*/{
+                                    getOperandSegmentSizesAttrName(),
+                                    getIndSrcMapAttrName(),
+                                    getDirSrcMapAttrName(),
+                                    getIndDstMapAttrName(),
+                                    getDirDstMapAttrName(),
+                                    getStaticDirSrcSizesAttrName(),
+                                    getStaticDirDstSizesAttrName(),
+                                });
 
   // Type list
   printer << "\n    : ";
@@ -937,8 +904,8 @@ void IndDataTransferOp::print(OpAsmPrinter& printer) {
 }
 
 void IndDataTransferOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>&
-        effects) {
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
   // Only memref operands carry MemoryEffects — FIFO slots are dataflow tokens
   // and are intentionally excluded (consistent with OpaqueOp::getEffects).
   //
@@ -947,7 +914,7 @@ void IndDataTransferOp::getEffects(
   //   dir_src:        Read  — data source
   //   ind_dst_memref: Read  — IAB is read to obtain the scatter dest address
   //   dir_dst memref: Write — data destination (absent when dir_dst is a FIFO)
-  for (auto& operand : (*this)->getOpOperands()) {
+  for (auto &operand : (*this)->getOpOperands()) {
     if (!isa<MemRefType>(operand.get().getType())) {
       continue;
     }
@@ -967,8 +934,8 @@ auto IndDataTransferOp::verify() -> LogicalResult {
 
   if (has_ind_src == has_ind_dst) {
     return emitOpError(
-        "exactly one of 'ind_src' / 'ind_dst' must be present (got "
-        + Twine(has_ind_src ? "both" : "neither") + ")");
+        "exactly one of 'ind_src' / 'ind_dst' must be present (got " +
+        Twine(has_ind_src ? "both" : "neither") + ")");
   }
 
   // Reusable helper: verify one memref side's map, indices, and sizes.
@@ -980,38 +947,43 @@ auto IndDataTransferOp::verify() -> LogicalResult {
       return emitOpError("'") << name << "' map must be present for a memref";
     }
     if (map->getNumSymbols() != 0) {
-      return emitOpError("'") << name << "' map must have 0 symbols (dims-only); got "
-                              << map->getNumSymbols();
+      return emitOpError("'")
+             << name << "' map must have 0 symbols (dims-only); got "
+             << map->getNumSymbols();
     }
     if (map->getNumResults() != static_cast<unsigned>(type.getRank())) {
-      return emitOpError("'") << name << "' memref has rank " << type.getRank()
-                              << " but map has " << map->getNumResults() << " results";
+      return emitOpError("'")
+             << name << "' memref has rank " << type.getRank()
+             << " but map has " << map->getNumResults() << " results";
     }
     if (indices.size() != map->getNumDims()) {
-      return emitOpError("'") << name << "' indices count (" << indices.size()
-                              << ") must match map dim count ("
-                              << map->getNumDims() << ")";
+      return emitOpError("'")
+             << name << "' indices count (" << indices.size()
+             << ") must match map dim count (" << map->getNumDims() << ")";
     }
     if (static_sizes &&
         static_sizes->size() != static_cast<unsigned>(type.getRank())) {
-      return emitOpError("'") << name << "' size count (" << static_sizes->size()
-                              << ") must match memref rank (" << type.getRank() << ")";
+      return emitOpError("'")
+             << name << "' size count (" << static_sizes->size()
+             << ") must match memref rank (" << type.getRank() << ")";
     }
     return success();
   };
 
-  // Reusable helper: verify dynamic size operand count vs. static sentinel count.
+  // Reusable helper: verify dynamic size operand count vs. static sentinel
+  // count.
   const auto verify_dynamic_sizes =
       [&](Twine name, OperandRange dynamic_sizes,
           std::optional<ArrayRef<int64_t>> static_sizes) -> LogicalResult {
-    if (!static_sizes) return success();
+    if (!static_sizes)
+      return success();
     const unsigned num_dynamic = llvm::count_if(
         *static_sizes, [](int64_t v) { return ShapedType::isDynamic(v); });
     if (dynamic_sizes.size() != num_dynamic) {
-      return emitOpError("number of dynamic '") << name << "' sizes ("
-          << dynamic_sizes.size()
-          << ") must match number of dynamic entries in static_" << name
-          << "_sizes (" << num_dynamic << ")";
+      return emitOpError("number of dynamic '")
+             << name << "' sizes (" << dynamic_sizes.size()
+             << ") must match number of dynamic entries in static_" << name
+             << "_sizes (" << num_dynamic << ")";
     }
     return success();
   };
@@ -1024,7 +996,8 @@ auto IndDataTransferOp::verify() -> LogicalResult {
   }
 
   // When ind_dst is present (scatter), dir_dst must be a memref: the IAB entry
-  // resolves the base address in memory, so the direct destination must be concrete.
+  // resolves the base address in memory, so the direct destination must be
+  // concrete.
   if (has_ind_dst && !isa<MemRefType>(getDirDst().getType())) {
     return emitOpError(
         "'dir_dst' must be a memref when 'ind_dst' is present (scatter mode)");
@@ -1032,8 +1005,8 @@ auto IndDataTransferOp::verify() -> LogicalResult {
 
   // Validate dir_src when it is a memref.
   if (auto src_memref = llvm::dyn_cast<MemRefType>(getDirSrc().getType())) {
-    if (failed(verify_memref_side("dir_src", src_memref,
-                                  getDirSrcMap(), getDirSrcIndices(),
+    if (failed(verify_memref_side("dir_src", src_memref, getDirSrcMap(),
+                                  getDirSrcIndices(),
                                   getStaticDirSrcSizes())) ||
         failed(verify_dynamic_sizes("dir_src", getDirSrcSizes(),
                                     getStaticDirSrcSizes()))) {
@@ -1043,8 +1016,8 @@ auto IndDataTransferOp::verify() -> LogicalResult {
 
   // Validate dir_dst when it is a memref.
   if (auto dst_memref = llvm::dyn_cast<MemRefType>(getDirDst().getType())) {
-    if (failed(verify_memref_side("dir_dst", dst_memref,
-                                  getDirDstMap(), getDirDstIndices(),
+    if (failed(verify_memref_side("dir_dst", dst_memref, getDirDstMap(),
+                                  getDirDstIndices(),
                                   getStaticDirDstSizes())) ||
         failed(verify_dynamic_sizes("dir_dst", getDirDstSizes(),
                                     getStaticDirDstSizes()))) {
@@ -1072,14 +1045,15 @@ auto IndDataTransferOp::getAffineMapAttrForMemRef(Value memref)
 }
 
 // Build with OpFoldResult sizes.
-void IndDataTransferOp::build(
-    OpBuilder& builder, OperationState& state,
-    Value ind_src_memref, Value ind_src_index,
-    Value dir_src, AffineMap dir_src_map,
-    ValueRange dir_src_indices, ArrayRef<OpFoldResult> dir_src_sizes,
-    Value ind_dst_memref, Value ind_dst_index,
-    Value dir_dst, AffineMap dir_dst_map,
-    ValueRange dir_dst_indices, ArrayRef<OpFoldResult> dir_dst_sizes) {
+void IndDataTransferOp::build(OpBuilder &builder, OperationState &state,
+                              Value ind_src_memref, Value ind_src_index,
+                              Value dir_src, AffineMap dir_src_map,
+                              ValueRange dir_src_indices,
+                              ArrayRef<OpFoldResult> dir_src_sizes,
+                              Value ind_dst_memref, Value ind_dst_index,
+                              Value dir_dst, AffineMap dir_dst_map,
+                              ValueRange dir_dst_indices,
+                              ArrayRef<OpFoldResult> dir_dst_sizes) {
   SmallVector<Value> dyn_src_sizes;
   SmallVector<int64_t> static_src_sizes;
   dispatchIndexOpFoldResults(dir_src_sizes, dyn_src_sizes, static_src_sizes);
@@ -1101,10 +1075,10 @@ void IndDataTransferOp::build(
         /*dir_dst=*/dir_dst,
         /*dir_dst_indices=*/dir_dst_indices,
         /*dir_dst_sizes=*/dyn_dst_sizes,
-        /*dir_src_map=*/dir_src_map ? AffineMapAttr::get(dir_src_map)
-                                    : AffineMapAttr(),
-        /*dir_dst_map=*/dir_dst_map ? AffineMapAttr::get(dir_dst_map)
-                                    : AffineMapAttr(),
+        /*dir_src_map=*/
+            dir_src_map ? AffineMapAttr::get(dir_src_map) : AffineMapAttr(),
+        /*dir_dst_map=*/
+            dir_dst_map ? AffineMapAttr::get(dir_dst_map) : AffineMapAttr(),
         /*ind_src_map=*/AffineMapAttr(),
         /*ind_dst_map=*/AffineMapAttr(),
         /*static_dir_src_sizes=*/
@@ -1114,28 +1088,36 @@ void IndDataTransferOp::build(
 }
 
 // Build with all-static sizes.
-void IndDataTransferOp::build(
-    OpBuilder& builder, OperationState& state,
-    Value ind_src_memref, Value ind_src_index,
-    Value dir_src, AffineMap dir_src_map,
-    ValueRange dir_src_indices, ArrayRef<int64_t> dir_src_sizes,
-    Value ind_dst_memref, Value ind_dst_index,
-    Value dir_dst, AffineMap dir_dst_map,
-    ValueRange dir_dst_indices, ArrayRef<int64_t> dir_dst_sizes) {
-  const auto to_ofr =
-      [&](int64_t v) -> OpFoldResult { return builder.getI64IntegerAttr(v); };
+void IndDataTransferOp::build(OpBuilder &builder, OperationState &state,
+                              Value ind_src_memref, Value ind_src_index,
+                              Value dir_src, AffineMap dir_src_map,
+                              ValueRange dir_src_indices,
+                              ArrayRef<int64_t> dir_src_sizes,
+                              Value ind_dst_memref, Value ind_dst_index,
+                              Value dir_dst, AffineMap dir_dst_map,
+                              ValueRange dir_dst_indices,
+                              ArrayRef<int64_t> dir_dst_sizes) {
   build(builder, state,
-        ind_src_memref, ind_src_index,
-        dir_src, dir_src_map, dir_src_indices,
-        llvm::map_to_vector(dir_src_sizes, to_ofr),
-        ind_dst_memref, ind_dst_index,
-        dir_dst, dir_dst_map, dir_dst_indices,
-        llvm::map_to_vector(dir_dst_sizes, to_ofr));
+        /*ind_src_memref=*/ind_src_memref,
+        /*ind_src_index=*/ind_src_index,
+        /*dir_src=*/dir_src,
+        /*dir_src_indices=*/dir_src_indices,
+        /*dir_src_sizes=*/ValueRange{},
+        /*ind_dst_memref=*/ind_dst_memref,
+        /*ind_dst_index=*/ind_dst_index,
+        /*dir_dst=*/dir_dst,
+        /*dir_dst_indices=*/dir_dst_indices,
+        /*dir_dst_sizes=*/ValueRange{},
+        /*dir_src_map=*/
+            dir_src_map ? AffineMapAttr::get(dir_src_map) : AffineMapAttr(),
+        /*dir_dst_map=*/
+            dir_dst_map ? AffineMapAttr::get(dir_dst_map) : AffineMapAttr(),
+        /*ind_src_map=*/AffineMapAttr(),
+        /*ind_dst_map=*/AffineMapAttr(),
+        /*static_dir_src_sizes=*/builder.getDenseI64ArrayAttr(dir_src_sizes),
+        /*static_dir_dst_sizes=*/builder.getDenseI64ArrayAttr(dir_dst_sizes));
 }
 
-
-
->>>>>>> 00ff2d5 (add ktdf.ind_data_transfer op + add memory effect interface to ktdf.data_transfer)
 //===----------------------------------------------------------------------===//
 // ReadFromFifoOp
 //===----------------------------------------------------------------------===//
@@ -1165,7 +1147,7 @@ auto verifyFifoReadWrite(FifoSlotType slot, ShapedType shaped,
   return success();
 }
 
-}  // namespace
+} // namespace
 
 auto ReadFromFifoOp::verify() -> LogicalResult {
   return verifyFifoReadWrite(getFifoSlot().getType(),
@@ -1219,9 +1201,9 @@ void WriteToFifoOp::getEffects(
 //===----------------------------------------------------------------------===//
 
 void ParallelOp::build(
-    OpBuilder& builder, OperationState& state, ValueRange lower_bounds,
+    OpBuilder &builder, OperationState &state, ValueRange lower_bounds,
     ValueRange upper_bounds, ValueRange steps, int64_t num_instances,
-    function_ref<void(OpBuilder&, Location, ValueRange, Value)> body_builder) {
+    function_ref<void(OpBuilder &, Location, ValueRange, Value)> body_builder) {
   state.addOperands(lower_bounds);
   state.addOperands(upper_bounds);
   state.addOperands(steps);
@@ -1230,7 +1212,7 @@ void ParallelOp::build(
 
   // Create the body region with a single block. The block has one index
   // argument per induction variable plus one trailing instance-id argument.
-  auto& body = state.addRegion()->emplaceBlock();
+  auto &body = state.addRegion()->emplaceBlock();
   const auto num_loops = lower_bounds.size();
   SmallVector<Type> arg_types(num_loops + 1U, builder.getIndexType());
   SmallVector<Location> arg_locs(num_loops + 1U, state.location);
@@ -1244,15 +1226,15 @@ void ParallelOp::build(
   }
 }
 
-auto ParallelOp::parse(OpAsmParser& parser, OperationState& result)
+auto ParallelOp::parse(OpAsmParser &parser, OperationState &result)
     -> ParseResult {
-  auto& builder = parser.getBuilder();
+  auto &builder = parser.getBuilder();
   const auto index_ty = builder.getIndexType();
 
   // Parse the block-argument list: `(` %iv1, %iv2, ..., %inst `)`.
   SmallVector<OpAsmParser::Argument> body_args;
   if (parser.parseCommaSeparatedList(OpAsmParser::Delimiter::Paren, [&]() {
-        auto& arg = body_args.emplace_back();
+        auto &arg = body_args.emplace_back();
         arg.type = index_ty;
         return parser.parseArgument(arg);
       })) {
@@ -1301,7 +1283,7 @@ auto ParallelOp::parse(OpAsmParser& parser, OperationState& result)
   }
 
   // Parse the region using the named block arguments.
-  Region* body = result.addRegion();
+  Region *body = result.addRegion();
   if (parser.parseRegion(*body, body_args)) {
     return failure();
   }
@@ -1314,7 +1296,7 @@ auto ParallelOp::parse(OpAsmParser& parser, OperationState& result)
   return success();
 }
 
-void ParallelOp::print(OpAsmPrinter& printer) {
+void ParallelOp::print(OpAsmPrinter &printer) {
   // Print block-argument list: `(` %iv1, ..., %inst `)`. Block args are all
   // index-typed by construction (see verify), so we only print the SSA names
   // here — the parser binds them as index without type annotations, matching
@@ -1358,7 +1340,7 @@ auto ParallelOp::verify() -> LogicalResult {
            << getNumInstances();
   }
 
-  auto& body = *getBody();
+  auto &body = *getBody();
   const auto expected_args = num_loops + 1;
   if (body.getNumArguments() != expected_args) {
     return emitOpError("expected ")
@@ -1382,7 +1364,7 @@ auto ParallelOp::verifyRegions() -> LogicalResult {
   // The custom parser's parseRegion already enforces a terminator, so this
   // check fires only when the op is constructed via the generic op form or
   // programmatically without a terminator.
-  auto& body = *getBody();
+  auto &body = *getBody();
   if (body.empty() || !isa<ParallelYieldOp>(body.back())) {
     return emitOpError(
         "region must be terminated by a ktdf.parallel_yield operation");
@@ -1531,8 +1513,8 @@ auto SelectMemrefOp::fold(FoldAdaptor adaptor) -> OpFoldResult {
 //===----------------------------------------------------------------------===//
 
 void OpaqueOp::getEffects(
-    SmallVectorImpl<MemoryEffects::EffectInstance>& effects) {
-  for (auto& input : getInputsMutable()) {
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  for (auto &input : getInputsMutable()) {
     if (!isa<MemRefType>(input.get().getType())) {
       continue;
     }
@@ -1540,7 +1522,7 @@ void OpaqueOp::getEffects(
     effects.emplace_back(MemoryEffects::Read::get(), &input);
   }
 
-  for (auto& output : getOutputsMutable()) {
+  for (auto &output : getOutputsMutable()) {
     if (!isa<MemRefType>(output.get().getType())) {
       continue;
     }
