@@ -701,25 +701,35 @@ void DataTransferOp::getEffects(
 void IndDataTransferOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>&
         effects) {
-  // Only memref operands carry MemoryEffects — FIFO slots are dataflow tokens
-  // and are intentionally excluded (consistent with OpaqueOp::getEffects).
-  //
-  // Effect assignment:
-  //   ind_src_memref: Read  — IAB is read to obtain the gather source address
-  //   dir_src:        Read  — data source
-  //   ind_dst_memref: Read  — IAB is read to obtain the scatter dest address
-  //   dir_dst memref: Write — data destination (absent when dir_dst is a FIFO)
-  for (auto& operand : (*this)->getOpOperands()) {
-    if (!isa<MemRefType>(operand.get().getType())) {
-      continue;
-    }
-    if (operand.get() == getDirDst()) {
-      effects.emplace_back(MemoryEffects::Write::get(), &operand,
-                           SideEffects::DefaultResource::get());
-    } else {
-      effects.emplace_back(MemoryEffects::Read::get(), &operand,
-                           SideEffects::DefaultResource::get());
-    }
+  // Effect assignment (consistent with DataTransferOp::getEffects):
+  //   ind_src memref: Read             — IAB read to obtain scatter/gather addr
+  //   dir_src memref: Read             — data source
+  //   dir_src fifo:   Read + Write     — consuming a FIFO slot mutates its state
+  //   ind_dst memref: Read             — IAB read to obtain scatter dest address
+  //   dir_dst memref: Write            — data destination
+  //   dir_dst fifo:   Write            — producing into a FIFO slot
+
+  // IAB memrefs are always reads.
+  if (isGather())
+    effects.emplace_back(MemoryEffects::Read::get(), &getIndSrcMemrefOpOperand());
+  if (isScatter())
+    effects.emplace_back(MemoryEffects::Read::get(), &getIndDstMemrefOpOperand());
+
+  // dir_src: memref → Read; fifo.slot → Read + pessimistic clobber Write.
+  if (isa<FifoSlotType>(getDirSrc().getType())) {
+    effects.emplace_back(MemoryEffects::Read::get(), &getDirSrcMutable(),
+                         FifoResource::get());
+    effects.emplace_back(MemoryEffects::Write::get(), FifoResource::get());
+  } else {
+    effects.emplace_back(MemoryEffects::Read::get(), &getDirSrcMutable());
+  }
+
+  // dir_dst: memref → Write; fifo.slot → Write.
+  if (isa<FifoSlotType>(getDirDst().getType())) {
+    effects.emplace_back(MemoryEffects::Write::get(), &getDirDstMutable(),
+                         0, false, FifoResource::get());
+  } else {
+    effects.emplace_back(MemoryEffects::Write::get(), &getDirDstMutable());
   }
 }
 

@@ -952,6 +952,18 @@ def KTDF_IndDataTransferOp : KTDF_Op<"ind_data_transfer", [
       return SmallVector<int64_t>(sizes.begin(), sizes.end());
     }
 
+    /// Returns the OpOperand for ind_src_memref. Only valid for gather ops.
+    OpOperand &getIndSrcMemrefOpOperand() {
+      assert(isGather() && "ind_src_memref is only present in gather mode");
+      return getIndSrcMemrefMutable()[0];
+    }
+
+    /// Returns the OpOperand for ind_dst_memref. Only valid for scatter ops.
+    OpOperand &getIndDstMemrefOpOperand() {
+      assert(isScatter() && "ind_dst_memref is only present in scatter mode");
+      return getIndDstMemrefMutable()[0];
+    }
+
     /// Implements AffineMapAccessInterface.
     NamedAttribute getAffineMapAttrForMemRef(Value memref);
   }];
